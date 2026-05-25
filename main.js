@@ -36,129 +36,153 @@ function isImage(path) {
   return IMAGE_EXTS.has(ext);
 }
 function parentDir(path) {
-  const idx = path.lastIndexOf("/");
-  return idx === -1 ? "" : path.substring(0, idx);
+  const i = path.lastIndexOf("/");
+  return i === -1 ? "" : path.substring(0, i);
 }
 function fileName(path) {
-  const idx = path.lastIndexOf("/");
-  return idx === -1 ? path : path.substring(idx + 1);
+  const i = path.lastIndexOf("/");
+  return i === -1 ? path : path.substring(i + 1);
 }
-function resolveImagePath(vaultPath, ref) {
+function resolveImagePath(docDir, ref) {
   if (ref.startsWith("/"))
     return ref.substring(1);
-  if (ref.includes("/")) {
+  if (ref.includes("/"))
     return ref;
-  }
-  if (vaultPath === "")
-    return ref;
-  return vaultPath + "/" + ref;
+  return docDir ? docDir + "/" + ref : ref;
 }
 var FigureMoverPlugin = class extends import_obsidian.Plugin {
   async onload() {
-    const ICON = "image-file";
-    this.addRibbonIcon(ICON, "Move figures to current dir", () => {
-      this.moveFigures();
+    this.addRibbonIcon("image-file", "Organize all figures", () => {
+      this.organizeAll();
     });
     this.addCommand({
-      id: "move-figures-to-current-dir",
-      name: "Move figures to current document directory",
-      callback: () => this.moveFigures()
+      id: "organize-all-figures",
+      name: "Organize all figures across vault",
+      callback: () => this.organizeAll()
     });
   }
-  async moveFigures() {
+  async organizeAll() {
     var _a;
-    const file = this.app.workspace.getActiveFile();
-    if (!file) {
-      new import_obsidian.Notice("No active file.");
+    const mdFiles = this.app.vault.getMarkdownFiles();
+    if (mdFiles.length === 0) {
+      new import_obsidian.Notice("No markdown files found.");
       return;
     }
-    const content = await this.app.vault.read(file);
-    const docDir = parentDir(file.path);
-    const ops = [];
-    for (const m of content.matchAll(WIKI_RE)) {
-      const rawRef = m[1];
-      const alias = (_a = m[2]) != null ? _a : "";
-      if (!isImage(rawRef))
-        continue;
-      const resolved = resolveImagePath(docDir, rawRef);
-      if (!resolved)
-        continue;
-      const tFile = this.app.vault.getAbstractFileByPath(resolved);
-      if (!(tFile instanceof import_obsidian.TFile))
-        continue;
-      if (parentDir(tFile.path) === docDir)
-        continue;
-      const newName = fileName(tFile.path);
-      let newPath = docDir ? docDir + "/" + newName : newName;
-      newPath = this.uniquePath(newPath);
-      ops.push({
-        file: tFile,
-        newPath,
-        oldRef: rawRef,
-        newRef: docDir ? docDir + "/" + newName : newName,
-        type: "wiki",
-        fullMatch: m[0],
-        aliasOrAlt: alias
-      });
-    }
-    for (const m of content.matchAll(MD_RE)) {
-      const alt = m[1];
-      const rawRef = decodeURIComponent(m[2]);
-      if (!isImage(rawRef))
-        continue;
-      if (rawRef.startsWith("http://") || rawRef.startsWith("https://"))
-        continue;
-      const resolved = resolveImagePath(docDir, rawRef);
-      if (!resolved)
-        continue;
-      const tFile = this.app.vault.getAbstractFileByPath(resolved);
-      if (!(tFile instanceof import_obsidian.TFile))
-        continue;
-      if (parentDir(tFile.path) === docDir)
-        continue;
-      const newName = fileName(tFile.path);
-      let newPath = docDir ? docDir + "/" + newName : newName;
-      newPath = this.uniquePath(newPath);
-      ops.push({
-        file: tFile,
-        newPath,
-        oldRef: m[2],
-        newRef: newName,
-        type: "md",
-        fullMatch: m[0],
-        aliasOrAlt: alt
-      });
-    }
-    if (ops.length === 0) {
-      new import_obsidian.Notice("No images to move.");
-      return;
-    }
-    for (const op of ops) {
-      await this.app.vault.rename(op.file, op.newPath);
-    }
-    await this.app.vault.process(file, (data) => {
-      for (const op of ops) {
-        if (op.type === "wiki") {
-          const newWiki = `![[${op.newRef}${op.aliasOrAlt}]]`;
-          data = data.replace(op.fullMatch, newWiki);
-        } else {
-          const newMd = `![${op.aliasOrAlt}](${op.newRef})`;
-          data = data.replace(op.fullMatch, newMd);
-        }
+    const imageRefCount = /* @__PURE__ */ new Map();
+    for (const doc of mdFiles) {
+      const content = await this.app.vault.cachedRead(doc);
+      const docDir = parentDir(doc.path);
+      for (const m of content.matchAll(WIKI_RE)) {
+        const rawRef = m[1];
+        if (!isImage(rawRef))
+          continue;
+        const resolved = resolveImagePath(docDir, rawRef);
+        if (!resolved)
+          continue;
+        const tFile = this.app.vault.getAbstractFileByPath(resolved);
+        if (!(tFile instanceof import_obsidian.TFile))
+          continue;
+        if (parentDir(tFile.path) === docDir)
+          continue;
+        this.addRef(imageRefCount, resolved, doc, {
+          file: tFile,
+          type: "wiki",
+          fullMatch: m[0],
+          aliasOrAlt: (_a = m[2]) != null ? _a : ""
+        });
       }
-      return data;
-    });
-    new import_obsidian.Notice(`Moved ${ops.length} image(s) to "${docDir || "/"}".`);
+      for (const m of content.matchAll(MD_RE)) {
+        const rawRef = decodeURIComponent(m[2]);
+        if (!isImage(rawRef))
+          continue;
+        if (rawRef.startsWith("http://") || rawRef.startsWith("https://"))
+          continue;
+        const resolved = resolveImagePath(docDir, rawRef);
+        if (!resolved)
+          continue;
+        const tFile = this.app.vault.getAbstractFileByPath(resolved);
+        if (!(tFile instanceof import_obsidian.TFile))
+          continue;
+        if (parentDir(tFile.path) === docDir)
+          continue;
+        this.addRef(imageRefCount, resolved, doc, {
+          file: tFile,
+          type: "md",
+          fullMatch: m[0],
+          aliasOrAlt: m[1]
+        });
+      }
+    }
+    if (imageRefCount.size === 0) {
+      new import_obsidian.Notice("All figures are already organized.");
+      return;
+    }
+    let moved = 0;
+    let copied = 0;
+    const toDelete = [];
+    for (const [imgPath, docEntries] of imageRefCount) {
+      const imgFile = docEntries[0].refs[0].file;
+      const isShared = docEntries.length > 1;
+      for (const { doc, refs } of docEntries) {
+        const docDir = parentDir(doc.path);
+        const newName = fileName(imgPath);
+        let newPath = docDir ? docDir + "/" + newName : newName;
+        newPath = this.uniquePath(newPath);
+        const newRef = docDir ? docDir + "/" + fileName(newPath) : fileName(newPath);
+        if (isShared) {
+          const data = await this.app.vault.readBinary(imgFile);
+          await this.app.vault.create(newPath, data);
+          copied++;
+        } else {
+          await this.app.vault.rename(imgFile, newPath);
+          moved++;
+        }
+        await this.app.vault.process(doc, (text) => {
+          for (const ref of refs) {
+            const replacement = ref.type === "wiki" ? `![[${newRef}${ref.aliasOrAlt}]]` : `![${ref.aliasOrAlt}](${newRef})`;
+            text = text.replace(ref.fullMatch, replacement);
+          }
+          return text;
+        });
+      }
+      if (isShared) {
+        toDelete.push(imgFile);
+      }
+    }
+    for (const f of toDelete) {
+      if (this.app.vault.getAbstractFileByPath(f.path) instanceof import_obsidian.TFile) {
+        await this.app.vault.trash(f, true);
+      }
+    }
+    const parts = [];
+    if (moved > 0)
+      parts.push(`moved ${moved}`);
+    if (copied > 0)
+      parts.push(`copied ${copied}`);
+    new import_obsidian.Notice(`Done: ${parts.join(", ")} image(s).`);
+  }
+  addRef(map, imgPath, doc, ref) {
+    let entries = map.get(imgPath);
+    if (!entries) {
+      entries = [];
+      map.set(imgPath, entries);
+    }
+    let entry = entries.find((e) => e.doc.path === doc.path);
+    if (!entry) {
+      entry = { doc, refs: [] };
+      entries.push(entry);
+    }
+    entry.refs.push(ref);
   }
   uniquePath(path) {
     if (!this.app.vault.getAbstractFileByPath(path))
       return path;
-    const ext = path.lastIndexOf(".") !== -1 ? path.substring(path.lastIndexOf(".")) : "";
-    const base = ext ? path.substring(0, path.length - ext.length) : path;
+    const dotIdx = path.lastIndexOf(".");
+    const ext = dotIdx !== -1 ? path.substring(dotIdx) : "";
+    const base = dotIdx !== -1 ? path.substring(0, dotIdx) : path;
     let i = 1;
-    while (this.app.vault.getAbstractFileByPath(`${base}-${i}${ext}`)) {
+    while (this.app.vault.getAbstractFileByPath(`${base}-${i}${ext}`))
       i++;
-    }
     return `${base}-${i}${ext}`;
   }
 };
