@@ -49,6 +49,12 @@ interface MoveOp {
 
 export default class FigureMoverPlugin extends Plugin {
 	async onload() {
+		const ICON = "image-file";
+
+		this.addRibbonIcon(ICON, "Move figures to current dir", () => {
+			this.moveFigures();
+		});
+
 		this.addCommand({
 			id: "move-figures-to-current-dir",
 			name: "Move figures to current document directory",

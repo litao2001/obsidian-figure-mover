@@ -55,6 +55,10 @@ function resolveImagePath(vaultPath, ref) {
 }
 var FigureMoverPlugin = class extends import_obsidian.Plugin {
   async onload() {
+    const ICON = "image-file";
+    this.addRibbonIcon(ICON, "Move figures to current dir", () => {
+      this.moveFigures();
+    });
     this.addCommand({
       id: "move-figures-to-current-dir",
       name: "Move figures to current document directory",
