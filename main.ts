@@ -20,10 +20,26 @@ function fileName(path: string): string {
 	return i === -1 ? path : path.substring(i + 1);
 }
 
-function resolveImagePath(docDir: string, ref: string): string | null {
-	if (ref.startsWith("/")) return ref.substring(1);
-	if (ref.includes("/")) return ref;
-	return docDir ? docDir + "/" + ref : ref;
+function resolveImagePath(
+	docDir: string,
+	ref: string,
+	getFile: (path: string) => TFile | null,
+	nameIndex: Map<string, TFile>,
+): string | null {
+	if (ref.startsWith("/")) {
+		const f = getFile(ref.substring(1));
+		return f ? f.path : null;
+	}
+	if (ref.includes("/")) {
+		const f = getFile(ref);
+		return f ? f.path : null;
+	}
+	// Try doc-relative first
+	const rel = docDir ? docDir + "/" + ref : ref;
+	if (getFile(rel)) return rel;
+	// Fallback: lookup by filename in vault-wide index
+	const found = nameIndex.get(ref);
+	return found ? found.path : null;
 }
 
 interface RefInfo {
@@ -36,25 +52,50 @@ interface RefInfo {
 export default class FigureMoverPlugin extends Plugin {
 	async onload() {
 		this.addRibbonIcon("image-plus", "Organize all figures", () => {
-			this.organizeAll();
+			this.organizeAll().catch((e: Error) => {
+				new Notice(`Figure Mover error: ${e.message}`);
+				console.error("Figure Mover error", e);
+			});
 		});
 
 		this.addCommand({
 			id: "organize-all-figures",
 			name: "Organize all figures across vault",
-			callback: () => this.organizeAll(),
+			callback: () => {
+				this.organizeAll().catch((e: Error) => {
+					new Notice(`Figure Mover error: ${e.message}`);
+					console.error("Figure Mover error", e);
+				});
+			},
 		});
 	}
 
 	async organizeAll() {
+		new Notice("Scanning vault...");
 		const mdFiles = this.app.vault.getMarkdownFiles();
+		new Notice(`Found ${mdFiles.length} markdown files.`);
+
 		if (mdFiles.length === 0) {
 			new Notice("No markdown files found.");
 			return;
 		}
 
+		// Build filename -> TFile index for global lookup
+		const nameIndex = new Map<string, TFile>();
+		for (const f of this.app.vault.getFiles()) {
+			if (isImage(f.path)) {
+				nameIndex.set(f.name, f);
+			}
+		}
+		new Notice(`Found ${nameIndex.size} image files in vault.`);
+
 		// image path -> list of docs referencing it
 		const imageRefCount = new Map<string, { doc: TFile; refs: RefInfo[] }[]>();
+
+		const getFile = (path: string): TFile | null => {
+			const f = this.app.vault.getAbstractFileByPath(path);
+			return f instanceof TFile ? f : null;
+		};
 
 		for (const doc of mdFiles) {
 			const content = await this.app.vault.cachedRead(doc);
@@ -63,10 +104,10 @@ export default class FigureMoverPlugin extends Plugin {
 			for (const m of content.matchAll(WIKI_RE)) {
 				const rawRef = m[1];
 				if (!isImage(rawRef)) continue;
-				const resolved = resolveImagePath(docDir, rawRef);
+				const resolved = resolveImagePath(docDir, rawRef, getFile, nameIndex);
 				if (!resolved) continue;
-				const tFile = this.app.vault.getAbstractFileByPath(resolved);
-				if (!(tFile instanceof TFile)) continue;
+				const tFile = getFile(resolved);
+				if (!tFile) continue;
 				if (parentDir(tFile.path) === docDir) continue;
 
 				this.addRef(imageRefCount, resolved, doc, {
@@ -81,10 +122,10 @@ export default class FigureMoverPlugin extends Plugin {
 				const rawRef = decodeURIComponent(m[2]);
 				if (!isImage(rawRef)) continue;
 				if (rawRef.startsWith("http://") || rawRef.startsWith("https://")) continue;
-				const resolved = resolveImagePath(docDir, rawRef);
+				const resolved = resolveImagePath(docDir, rawRef, getFile, nameIndex);
 				if (!resolved) continue;
-				const tFile = this.app.vault.getAbstractFileByPath(resolved);
-				if (!(tFile instanceof TFile)) continue;
+				const tFile = getFile(resolved);
+				if (!tFile) continue;
 				if (parentDir(tFile.path) === docDir) continue;
 
 				this.addRef(imageRefCount, resolved, doc, {
@@ -100,6 +141,8 @@ export default class FigureMoverPlugin extends Plugin {
 			new Notice("All figures are already organized.");
 			return;
 		}
+
+		new Notice(`Found ${imageRefCount.size} image(s) to move. Processing...`);
 
 		let moved = 0;
 		let copied = 0;
@@ -119,8 +162,7 @@ export default class FigureMoverPlugin extends Plugin {
 				if (isShared) {
 					// Copy to each doc's directory
 					const data = await this.app.vault.readBinary(imgFile);
-					// @ts-ignore — ArrayBuffer is valid for binary files
-					await this.app.vault.create(newPath, data as string);
+					await this.app.vault.createBinary(newPath, new Uint8Array(data));
 					copied++;
 				} else {
 					// Move (only one doc references it)
