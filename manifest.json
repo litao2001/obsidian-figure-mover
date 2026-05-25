@@ -1,0 +1,9 @@
+{
+	"id": "figure-mover",
+	"name": "Figure Mover",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Move images referenced in the current document to the document's directory and update references.",
+	"author": "litao",
+	"isDesktopOnly": false
+}
