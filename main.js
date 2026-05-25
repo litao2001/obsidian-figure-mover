@@ -52,7 +52,7 @@ function resolveImagePath(docDir, ref) {
 }
 var FigureMoverPlugin = class extends import_obsidian.Plugin {
   async onload() {
-    this.addRibbonIcon("image-file", "Organize all figures", () => {
+    this.addRibbonIcon("image-plus", "Organize all figures", () => {
       this.organizeAll();
     });
     this.addCommand({

@@ -35,7 +35,7 @@ interface RefInfo {
 
 export default class FigureMoverPlugin extends Plugin {
 	async onload() {
-		this.addRibbonIcon("image-file", "Organize all figures", () => {
+		this.addRibbonIcon("image-plus", "Organize all figures", () => {
 			this.organizeAll();
 		});
 
